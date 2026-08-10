@@ -4,7 +4,7 @@ Live 3D reconstruction from the Meta Ray-Ban glasses camera stream, where the 3D
 world **tracks real-world change** — move a pencil, and it moves in the scene.
 Exports to Blender, the web, game engines, and VR.
 
-Full plan and research: `~/.claude/plans/look-into-tencents-new-purring-dawn.md`
+Research notes and the full milestone plan live in the commit history.
 
 ## How the dynamic part works
 
@@ -211,9 +211,9 @@ fisheye model (focal within 5%, RMS < 0.5 px).
 
 ## iOS relay
 
-`ios/Glasses3DRelay.swift` is written against the **actual** DAT SDK API as used
-in `~/king-ai/apps/visionclaw/samples/CameraAccess` — this differs from Meta's
-published docs, which say `StreamConfiguration` where the SDK actually has
+`ios/Glasses3DRelay.swift` is written against the **actual** DAT SDK API, taken
+from a working integration rather than from the published docs — which say
+`StreamConfiguration` where the SDK actually has
 `StreamSessionConfig(videoCodec:resolution:frameRate:)`.
 
 **It compiles.** `ios/verify-build.sh` builds it in an isolated SPM package
@@ -227,9 +227,9 @@ pinned to `meta-wearables-dat-ios` 0.4.0 — the same version CameraAccess resol
 Verified under both Swift 5.0 (matching the CameraAccess target) and Swift 6.0
 strict concurrency.
 
-To use it, drop the file into the VisionClaw CameraAccess target — or delete its
-session management and call `relay.send(image:)` from the existing
-`videoFramePublisher` listener, right next to `webrtcSessionVM?.pushVideoFrame`.
+To use it, drop the file into any app target that already links the DAT SDK — or
+delete its session management and call `relay.send(image:)` from your existing
+`videoFramePublisher` listener.
 
 It implements backpressure (drops frames when >3 are in flight — a backlog makes
 every subsequent frame later still, which corrupts pose association worse than a
