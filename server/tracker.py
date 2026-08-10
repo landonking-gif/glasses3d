@@ -116,14 +116,28 @@ def select_keyframe(current_pose: Pose,
 
     The very first frame must always be admitted (`last_keyframe is None`),
     otherwise the reconstruction never starts.
-
-    Roughly 5-10 lines.
     """
-    # TODO(you): implement. Delete the line below when you do.
-    raise NotImplementedError(
-        "select_keyframe is yours to write — see server/tracker.py and the "
-        "README section 'Your contribution'."
-    )
+    if last_keyframe is None:
+        return True  # anchors the world origin
+
+    # Reject before measuring. A pose below the confidence floor is unreliable,
+    # and a blurred frame fits confident geometry to smeared pixels — both place
+    # real structure in the wrong spot, which is far harder to spot downstream
+    # than a gap in coverage.
+    if tracking_confidence < MIN_CONFIDENCE:
+        return False
+    if current_sharpness < MIN_SHARPNESS:
+        return False
+
+    # Sharpness earns a discount on the distance thresholds: a crisp frame just
+    # short of the threshold is worth more to the densifier than a barely-passable
+    # one just past it. Clamped at 0.6 so an unusually sharp stretch cannot
+    # collapse the thresholds and flood the densifier with keyframes.
+    ease = max(MIN_SHARPNESS / current_sharpness, 0.6)
+
+    moved = last_keyframe.pose.translation_to(current_pose)
+    turned = last_keyframe.pose.rotation_to(current_pose)
+    return moved >= TRANSLATION_M * ease or turned >= ROTATION_DEG * ease
 
 
 # ---------------------------------------------------------------------------

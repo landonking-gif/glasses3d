@@ -67,13 +67,69 @@ blurred = cv2.GaussianBlur(sharp, (21, 21), 8)
 check("sharpness ranks sharp above blurred", sharpness(sharp) > sharpness(blurred) * 2)
 check("sharpness of flat image is ~0", sharpness(np.zeros((64, 64, 3), np.uint8)) < 1e-6)
 
+# --- select_keyframe -------------------------------------------------------
+from tracker import (MIN_CONFIDENCE, MIN_SHARPNESS, ROTATION_DEG,  # noqa: E402
+                     TRANSLATION_M, Keyframe as KF, select_keyframe)
+
+GOOD = MIN_SHARPNESS * 2  # comfortably sharp
+
+
+def kf_at(pose, sharpness=None):
+    return KF(seq=0, pose=pose, image=sharp,
+              sharpness=GOOD if sharpness is None else sharpness, confidence=1.0)
+
+
+origin = kf_at(Pose.identity())
+check("first frame is always admitted", select_keyframe(Pose.identity(), None, 1.0, GOOD))
+check("first frame admitted even when blurred and unconfident",
+      select_keyframe(Pose.identity(), None, 0.0, 0.0))
+
+near = Pose(R=np.eye(3), t=np.array([TRANSLATION_M * 0.2, 0, 0]))
+far = Pose(R=np.eye(3), t=np.array([TRANSLATION_M * 3.0, 0, 0]))
+check("a small move is rejected", not select_keyframe(near, origin, 1.0, GOOD))
+check("a large move is admitted", select_keyframe(far, origin, 1.0, GOOD))
+
+turned = Pose(R=rot([0, 1, 0], ROTATION_DEG * 3.0), t=np.zeros(3))
+check("rotation alone can admit a keyframe", select_keyframe(turned, origin, 1.0, GOOD))
+small_turn = Pose(R=rot([0, 1, 0], ROTATION_DEG * 0.2), t=np.zeros(3))
+check("a small rotation is rejected", not select_keyframe(small_turn, origin, 1.0, GOOD))
+
+# Rejection gates must dominate distance — a big move seen badly is still bad.
+check("low confidence rejects even a large move",
+      not select_keyframe(far, origin, MIN_CONFIDENCE * 0.5, GOOD))
+check("blur rejects even a large move",
+      not select_keyframe(far, origin, 1.0, MIN_SHARPNESS * 0.5))
+
+# The sharpness discount: a crisp frame should clear a threshold that an
+# otherwise identical marginal frame does not.
+borderline = Pose(R=np.eye(3), t=np.array([TRANSLATION_M * 0.75, 0, 0]))
+check("very sharp frames earn a threshold discount",
+      select_keyframe(borderline, origin, 1.0, MIN_SHARPNESS * 100))
+check("marginally sharp frames do not get the discount",
+      not select_keyframe(borderline, origin, 1.0, MIN_SHARPNESS * 1.01))
+# ...but the discount is clamped, so it cannot collapse to always-true.
+tiny = Pose(R=np.eye(3), t=np.array([TRANSLATION_M * 0.5, 0, 0]))
+check("the discount is clamped at 0.6",
+      not select_keyframe(tiny, origin, 1.0, MIN_SHARPNESS * 1e6))
+
 # --- KeyframeBuffer --------------------------------------------------------
 buf = KeyframeBuffer(capacity=4)
-try:
-    buf.maybe_add(0, Pose.identity(), sharp, 1.0)
-    check("KeyframeBuffer exercises select_keyframe", False)
-except NotImplementedError:
-    check("select_keyframe is still the unimplemented stub (expected)", True)
+first = buf.maybe_add(0, Pose.identity(), sharp, 1.0)
+check("buffer admits the first frame", first is not None)
+check("buffer rejects a near-identical second frame",
+      buf.maybe_add(1, Pose.identity(), sharp, 1.0) is None)
+check("buffer admits a frame after real movement",
+      buf.maybe_add(2, Pose(R=np.eye(3), t=np.array([1.0, 0, 0])), sharp, 1.0) is not None)
+check("buffer tracks how many frames it considered", buf.considered == 3)
+check("selection rate is a sensible fraction", 0.0 < buf.selection_rate <= 1.0)
+
+# Capacity is enforced, and eviction never drops the origin anchor.
+big = KeyframeBuffer(capacity=3)
+for i in range(12):
+    big.maybe_add(i, Pose(R=np.eye(3), t=np.array([i * 1.0, 0, 0])), sharp, 1.0)
+check("buffer respects its capacity", len(big.frames) <= 3)
+check("buffer evicted something", big.evicted > 0)
+check("origin frame survives eviction", big.frames[0].seq == 0)
 
 # Eviction is independent of the stub, so it can be checked directly.
 buf.frames = [Keyframe(seq=i, pose=Pose.identity(), image=sharp,

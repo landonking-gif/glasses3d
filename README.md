@@ -77,33 +77,64 @@ never saw, with the same caveat as Voyager: plausible fills, not measurements.
 
 | Milestone | State |
 |---|---|
-| M1 — frame transport | server **done, tested**; iOS relay **written, uncompiled** |
+| M1 — frame transport | server **done, tested**; iOS relay **compiles against DAT SDK 0.4.0** |
 | M2 — calibration + undistortion | **done**, validated against synthetic ground truth |
-| M3 — camera tracking | `select_keyframe` is **yours**; MASt3R-SLAM binding needs CUDA |
-| M4 — densification | adapters defined; WorldMirror/MapAnything need CUDA |
-| M4b — **dynamic objects** | **world model + pipeline done and tested**; SAM 3 / FoundationPose need CUDA |
+| M3 — keyframe selection | **done, tested**; MASt3R-SLAM binding still needs CUDA |
+| M4 — densification | **offline path done, tested end-to-end** (mock backend); MapAnything needs CUDA |
+| M4b — dynamic objects | **world model + pipeline done and tested**; SAM 3 / FoundationPose need CUDA |
 | M5 — export | **done, tested** — 3DGS PLY + scene graph |
+| Colab | **notebook validated**; models unrun |
 
-88 tests pass locally. Everything model-dependent is written behind an interface
-with a working mock, so the logic is verified even though the models are not.
+133 tests pass locally. Everything model-dependent sits behind an interface with
+a working mock, so the surrounding logic is verified even where the models are not.
 
-## Your contribution
+**Still genuinely unverified:** no neural model in this repo has ever executed.
+MapAnything, SAM 3, FoundationPose and MASt3R-SLAM are all written against their
+documented APIs and exercised only through mocks. First real Colab run is where
+that gets tested.
 
-`server/tracker.py` still has one function deliberately unimplemented:
+## Running it on Colab
 
-```python
-def select_keyframe(current_pose, last_keyframe, tracking_confidence, current_sharpness) -> bool
+`colab/glasses3d_colab.ipynb` — open in Colab, set Runtime → GPU, work down.
+
+The notebook measures the GPU it was assigned before you commit to a mode, because
+Colab allocates opportunistically and the same notebook gets a T4 one run and an
+L4 the next:
+
+| GPU | vs RTX 4090 | Est. SLAM fps | Verdict |
+|---|---|---|---|
+| T4 (free tier) | ~0.16× | ~2.4 | **offline only** |
+| L4 (Pro) | ~0.30× | ~4.5 | marginal |
+| A100 40/80GB | ~0.65× | ~9.8 | live viable |
+| RTX PRO 6000 "G4" | ~1.1× | ~16 | comfortable |
+
+Live tracking needs roughly 8 fps to feel live, so **free-tier Colab cannot do
+live** — and that is fine, because offline is the better path anyway: recorded
+clips are 3K/60, about 9× the pixels of the 720p stream, with no latency budget
+to fight.
+
+The other live-mode obstacle is structural: **Colab has no public inbound
+address**, so the phone cannot reach it. The notebook opens a `cloudflared`
+quick tunnel and prints a `wss://` URL for `Glasses3DRelay.swift`, but that adds
+100–300 ms on top of the glasses→phone hop, and the URL changes every restart.
+For real live work, a persistent GPU box with a stable address beats Colab.
+
+Offline, from a shell:
+
+```bash
+python3 server/reconstruct.py --video clip.mp4 --out out/ --backend mapanything --views 32
 ```
 
-The valve between the real-time tracker and the async densifier, and the single
-most consequential tuning knob. Loose (0.30 m / 15°) → densifier keeps up, but
-fast head turns leave holes. Tight (0.10 m / 5°) → better coverage, but the
-densifier saturates and the reconstruction lags where you are looking. Motion
-blur is worse head-mounted than handheld, and a keyframe admitted at low
-tracking confidence misplaces real geometry. Always admit the first frame.
+Swap `--backend mock` to exercise the whole path with no GPU at all.
 
-Everything around it is written and tested. ~5–10 lines. `tools/test_tracker.py`
-currently asserts the stub is *unimplemented* — flip that check when you fill it in.
+## Licensing, since it is easy to get wrong
+
+`backends.py` defaults to **`facebook/map-anything-apache`** (Apache-2.0). The
+otherwise-identical `facebook/map-anything` is **CC-BY-NC** — research only.
+Opting into the NC weights should be deliberate, and the backend prints a warning
+if you do. FoundationPose is cleared for commercial use; **MASt3R's checkpoints
+are CC BY-NC-ND**, so the live camera tracker is the one piece that would need
+replacing before this could ship.
 
 ## Layout
 
@@ -117,7 +148,11 @@ server/tracker.py      camera pose math, blur metric, keyframe buffer
 server/worldmodel.py   dynamic scene state + the motion gate
 server/perception.py   SAM 3 / FoundationPose adapters + mocks + pipeline
 server/export.py       3DGS PLY, point cloud, scene graph, scene baking
-ios/Glasses3DRelay.swift   phone relay (drop into VisionClaw CameraAccess)
+server/backends.py     CUDA model adapters (MapAnything) + GPU capability probe
+server/reconstruct.py  offline driver: video in, scene.ply out
+colab/                 Colab notebook (offline + live modes)
+ios/Glasses3DRelay.swift   phone relay, compiles against DAT SDK 0.4.0
+ios/verify-build.sh        proves it compiles, without touching VisionClaw
 tools/                 mock sender + tests, all runnable without a GPU
 ```
 
@@ -144,7 +179,7 @@ python3 tools/mock_sender.py --ladder
 ## Tests
 
 ```bash
-for t in tracker worldmodel perception export calibration; do python3 tools/test_$t.py; done
+for t in tracker worldmodel perception export reconstruct calibration; do python3 tools/test_$t.py; done
 ```
 
 `test_calibration.py` takes a couple of minutes — it runs genuine corner
@@ -154,14 +189,24 @@ fisheye model (focal within 5%, RMS < 0.5 px).
 ## iOS relay
 
 `ios/Glasses3DRelay.swift` is written against the **actual** DAT SDK API as used
-in `~/king-ai/apps/visionclaw/samples/CameraAccess` — note this differs from
-Meta's published docs, which say `StreamConfiguration` where the SDK has
+in `~/king-ai/apps/visionclaw/samples/CameraAccess` — this differs from Meta's
+published docs, which say `StreamConfiguration` where the SDK actually has
 `StreamSessionConfig(videoCodec:resolution:frameRate:)`.
 
-It has **not been compiled** — it needs the MWDAT modules and an Xcode target.
-Drop it into the VisionClaw CameraAccess target, or delete its session management
-and call `relay.send(image:)` from the existing `videoFramePublisher` listener
-next to `webrtcSessionVM?.pushVideoFrame`.
+**It compiles.** `ios/verify-build.sh` builds it in an isolated SPM package
+pinned to `meta-wearables-dat-ios` 0.4.0 — the same version CameraAccess resolves
+— so a failure there is a problem with the relay, not with your app:
+
+```bash
+./ios/verify-build.sh
+```
+
+Verified under both Swift 5.0 (matching the CameraAccess target) and Swift 6.0
+strict concurrency.
+
+To use it, drop the file into the VisionClaw CameraAccess target — or delete its
+session management and call `relay.send(image:)` from the existing
+`videoFramePublisher` listener, right next to `webrtcSessionVM?.pushVideoFrame`.
 
 It implements backpressure (drops frames when >3 are in flight — a backlog makes
 every subsequent frame later still, which corrupts pose association worse than a

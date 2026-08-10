@@ -20,3 +20,6 @@ ios/**/DerivedData/
 *.xcuserstate
 
 .DS_Store
+
+# SPM build products from ios/verify-build.sh
+ios/Glasses3DRelayKit/.build*/
