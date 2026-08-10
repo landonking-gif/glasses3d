@@ -1,0 +1,11 @@
+# M1/M2 — runs anywhere, including Apple Silicon
+opencv-python>=4.8
+numpy>=1.24
+websockets>=11.0
+
+# M3/M4 — CUDA only, install on the GPU box:
+#   MASt3R-SLAM      github.com/rmurai0610/MASt3R-SLAM   (checkpoints CC BY-NC-ND)
+#   MapAnything      github.com/facebookresearch/map-anything
+#                    use facebook/map-anything-apache for commercial-safe weights
+#   WorldMirror      github.com/Tencent-Hunyuan/HunyuanWorld-Mirror
+#   rerun-sdk        trajectory visualisation for the M3 exit criterion

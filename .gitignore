@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Calibration captures are large and machine-specific; the derived
+# intrinsics.json is small and IS tracked — it is the useful artifact.
+calib/*.mp4
+calib/*.mov
+calib/shots/
+
+# Reconstruction outputs
+*.ply
+out/
+sessions/
+
+# iOS
+ios/**/build/
+ios/**/DerivedData/
+*.xcuserstate
+
+.DS_Store
