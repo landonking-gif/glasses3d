@@ -198,6 +198,93 @@ def _to_numpy(x):
     return x.detach().float().cpu().numpy() if hasattr(x, "detach") else np.asarray(x)
 
 
+# Colab compute-unit burn rates, CU/hour. Published figures vary between sources
+# (A100 is quoted anywhere from 5.4 to 15), so treat these as planning estimates
+# and check your actual balance in the Colab UI. Pro includes 100 CU/month.
+CU_PER_HOUR = {
+    "T4": 1.19,
+    "L4": 2.6,
+    "A100-40": 5.40,
+    "A100-80": 7.52,
+    "RTX PRO 6000": 9.0,
+}
+COLAB_PRO_MONTHLY_CU = 100.0
+
+
+def _cu_key(name: str, vram_gb: float) -> str:
+    key = name.upper()
+    if "A100" in key:
+        return "A100-80" if vram_gb > 60 else "A100-40"
+    if "L4" in key:
+        return "L4"
+    if "T4" in key:
+        return "T4"
+    if "RTX PRO 6000" in key or "H100" in key:
+        return "RTX PRO 6000"
+    return "L4"  # unknown premium GPU — assume mid-tier for planning
+
+
+def estimate_cost(hours: float, gpu: Optional[dict] = None) -> dict:
+    """What a job of this length costs against a Colab Pro allowance.
+
+    Worth checking before a long run. The allowance is smaller than it looks:
+    100 CU is about 84 hours of T4 but only ~18 hours of A100 40GB, so the
+    premium GPUs are a budget to spend deliberately rather than a default.
+    """
+    gpu = gpu or describe_gpu()
+    if not gpu.get("available"):
+        return {"error": gpu.get("reason", "no GPU")}
+    key = _cu_key(gpu["name"], gpu["vram_gb"])
+    rate = CU_PER_HOUR[key]
+    cu = rate * hours
+    return {
+        "gpu": gpu["name"],
+        "class": key,
+        "cu_per_hour": rate,
+        "hours": hours,
+        "compute_units": round(cu, 2),
+        "percent_of_monthly_pro": round(100.0 * cu / COLAB_PRO_MONTHLY_CU, 1),
+        "hours_available_on_full_allowance": round(COLAB_PRO_MONTHLY_CU / rate, 1),
+    }
+
+
+def budget_advice(gpu: Optional[dict] = None) -> List[str]:
+    """Concrete ways not to waste a Colab Pro allowance on this pipeline."""
+    gpu = gpu or describe_gpu()
+    if not gpu.get("available"):
+        return ["No GPU attached — nothing is being billed."]
+    key = _cu_key(gpu["name"], gpu["vram_gb"])
+    tips = []
+    if key.startswith("A100") or key == "RTX PRO 6000":
+        tips.append(
+            "You are on a premium GPU at %.2f CU/hr — about %.0f hours from a full "
+            "100 CU allowance. Everything below costs real budget."
+            % (CU_PER_HOUR[key], COLAB_PRO_MONTHLY_CU / CU_PER_HOUR[key]))
+        tips.append(
+            "Do pip installs, model downloads, calibration and any mock-backend "
+            "runs on a T4 instead. The first-run install alone is ~10 minutes; "
+            "that is ~0.9 CU on an A100 versus ~0.2 on a T4, every session.")
+        tips.append(
+            "Cache the repo and weights to Drive so premium sessions skip setup "
+            "entirely and spend their time on inference.")
+        tips.append(
+            "Disconnect the runtime the moment a job finishes. Idle premium "
+            "sessions bill at the same rate as busy ones.")
+    else:
+        tips.append(
+            "You are on %s at %.2f CU/hr — roughly %.0f hours from a full "
+            "allowance. Cheap enough to develop on freely."
+            % (key, CU_PER_HOUR[key], COLAB_PRO_MONTHLY_CU / CU_PER_HOUR[key]))
+        tips.append(
+            "Use this runtime for setup, calibration and mock runs, then switch "
+            "to A100 only for the reconstruction itself.")
+    if not gpu.get("live_viable"):
+        tips.append(
+            "This GPU is below the ~8 fps live threshold. Spending premium units "
+            "on live mode here would buy a slideshow — use offline mode.")
+    return tips
+
+
 def describe_gpu() -> dict:
     """What GPU did Colab actually hand us, and what does that imply?
 

@@ -111,6 +111,46 @@ check("GPU probe never raises", isinstance(gpu, dict) and "available" in gpu)
 check("GPU probe explains itself when unavailable",
       gpu["available"] or bool(gpu.get("reason")))
 
+# --- Colab Pro compute-unit budgeting --------------------------------------
+from backends import (COLAB_PRO_MONTHLY_CU, CU_PER_HOUR, _cu_key,  # noqa: E402
+                      budget_advice, estimate_cost)
+
+check("A100 80GB is distinguished from 40GB by VRAM",
+      _cu_key("NVIDIA A100-SXM4-80GB", 80.0) == "A100-80"
+      and _cu_key("NVIDIA A100-SXM4-40GB", 40.0) == "A100-40")
+check("T4 is classified", _cu_key("Tesla T4", 15.0) == "T4")
+check("unknown premium GPUs fall back to a mid tier",
+      _cu_key("Some Future GPU", 48.0) in CU_PER_HOUR)
+check("premium GPUs cost more per hour than a T4",
+      CU_PER_HOUR["A100-40"] > CU_PER_HOUR["L4"] > CU_PER_HOUR["T4"])
+
+a100 = {"available": True, "name": "NVIDIA A100-SXM4-40GB", "vram_gb": 40.0,
+        "live_viable": True}
+cost = estimate_cost(2.0, a100)
+check("cost scales with hours", abs(cost["compute_units"] - 2 * 5.40) < 1e-6)
+check("cost is expressed against the Pro allowance",
+      abs(cost["percent_of_monthly_pro"] - 10.8) < 0.1)
+check("allowance hours are reported",
+      abs(cost["hours_available_on_full_allowance"]
+          - COLAB_PRO_MONTHLY_CU / 5.40) < 0.1)
+check("a full A100 allowance is under 20 hours",
+      cost["hours_available_on_full_allowance"] < 20)
+
+t4 = {"available": True, "name": "Tesla T4", "vram_gb": 15.0, "live_viable": False}
+check("a T4 hour costs far less than an A100 hour",
+      estimate_cost(1.0, t4)["compute_units"] < cost["compute_units"] / 4)
+check("cost estimate degrades gracefully with no GPU",
+      "error" in estimate_cost(1.0, {"available": False, "reason": "no CUDA"}))
+
+adv_premium = " ".join(budget_advice(a100))
+check("premium advice warns about setup on an expensive GPU", "T4" in adv_premium)
+check("premium advice mentions disconnecting", "isconnect" in adv_premium)
+adv_cheap = " ".join(budget_advice(t4))
+check("cheap-GPU advice suggests switching up for the real run", "A100" in adv_cheap)
+check("advice warns when the GPU is below the live threshold",
+      "live" in adv_cheap.lower())
+check("advice is safe with no GPU", len(budget_advice({"available": False})) >= 1)
+
 # --- full CLI run -----------------------------------------------------------
 tmp = tempfile.mkdtemp(prefix="glasses3d-recon-")
 video = os.path.join(tmp, "clip.mp4")

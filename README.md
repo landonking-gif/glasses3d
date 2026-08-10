@@ -85,7 +85,7 @@ never saw, with the same caveat as Voyager: plausible fills, not measurements.
 | M5 — export | **done, tested** — 3DGS PLY + scene graph |
 | Colab | **notebook validated**; models unrun |
 
-133 tests pass locally. Everything model-dependent sits behind an interface with
+148 tests pass locally. Everything model-dependent sits behind an interface with
 a working mock, so the surrounding logic is verified even where the models are not.
 
 **Still genuinely unverified:** no neural model in this repo has ever executed.
@@ -108,16 +108,39 @@ L4 the next:
 | A100 40/80GB | ~0.65× | ~9.8 | live viable |
 | RTX PRO 6000 "G4" | ~1.1× | ~16 | comfortable |
 
-Live tracking needs roughly 8 fps to feel live, so **free-tier Colab cannot do
-live** — and that is fine, because offline is the better path anyway: recorded
-clips are 3K/60, about 9× the pixels of the 720p stream, with no latency budget
-to fight.
+Live tracking needs roughly 8 fps to feel live. On **Colab Pro that means A100
+or nothing** — an L4 lands near 4.5. Offline works on any of them, and is the
+better path regardless: recorded clips are 3K/60, about 9× the pixels of the
+720p stream, with no latency budget to fight.
 
 The other live-mode obstacle is structural: **Colab has no public inbound
 address**, so the phone cannot reach it. The notebook opens a `cloudflared`
 quick tunnel and prints a `wss://` URL for `Glasses3DRelay.swift`, but that adds
 100–300 ms on top of the glasses→phone hop, and the URL changes every restart.
-For real live work, a persistent GPU box with a stable address beats Colab.
+For sustained live work, a persistent GPU box with a stable address beats Colab.
+
+### Compute units are the real constraint
+
+Colab Pro includes **100 CU/month**. That is ~84 hours of T4 but only **~18
+hours of A100 40GB**, so premium GPUs are a budget to spend deliberately:
+
+| GPU | CU/hr | Hours on a full allowance |
+|---|---|---|
+| T4 | 1.19 | ~84 |
+| L4 | ~2.6 | ~38 |
+| A100 40GB | 5.40 | ~18.5 |
+| A100 80GB | 7.52 | ~13 |
+
+The notebook enforces a **two-phase workflow**. Phase 1 on a T4: install,
+download weights, calibrate, do a `--backend mock` run, cache everything to
+Drive. Phase 2 on an A100: rerun setup (seconds, from cache), reconstruct,
+download, **disconnect immediately** — idle premium sessions bill at the same
+rate as busy ones.
+
+That distinction is worth real money. The ~10-minute first install costs ~0.9 CU
+on an A100 versus ~0.2 on a T4, *every session*. `backends.estimate_cost()` and
+`backends.budget_advice()` report this at runtime, and the notebook auto-tunes
+`--views` to the VRAM it actually got (24 on a T4, 48 on a 40GB A100, 96 on 80GB).
 
 Offline, from a shell:
 
