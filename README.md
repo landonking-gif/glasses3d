@@ -1,5 +1,7 @@
 # glasses3d
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/landonking-gif/glasses3d/blob/main/colab/glasses3d_colab.ipynb)
+
 Live 3D reconstruction from the Meta Ray-Ban glasses camera stream, where the 3D
 world **tracks real-world change** — move a pencil, and it moves in the scene.
 Exports to Blender, the web, game engines, and VR.
@@ -95,7 +97,8 @@ that gets tested.
 
 ## Running it on Colab
 
-`colab/glasses3d_colab.ipynb` — open in Colab, set Runtime → GPU, work down.
+Click the badge above, or open `colab/glasses3d_colab.ipynb`. Set Runtime → GPU
+and work down; `GIT_URL` is already pointed at this repo.
 
 The notebook measures the GPU it was assigned before you commit to a mode, because
 Colab allocates opportunistically and the same notebook gets a T4 one run and an
