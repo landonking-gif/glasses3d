@@ -171,6 +171,12 @@ class MockSource(FrameSource):
 
     async def frames(self) -> AsyncIterator[Frame]:
         period = 1.0 / self.fps
+        # Deadline-based pacing, not a fixed sleep after each yield. A real
+        # camera emits on its own schedule regardless of how long the consumer
+        # takes; a fixed post-yield sleep instead *adds* consumer time to every
+        # frame interval, so a slow consumer would silently make the mock source
+        # look like a slow camera.
+        next_at = time.perf_counter()
         for seq in range(self.count):
             image = np.zeros((self.height, self.width, 3), np.uint8)
             offset = (seq * 7) % 80
@@ -190,4 +196,12 @@ class MockSource(FrameSource):
                 image=image,
                 ts_recv=now,
             )
-            await asyncio.sleep(period)
+            next_at += period
+            slack = next_at - time.perf_counter()
+            if slack > 0:
+                await asyncio.sleep(slack)
+            else:
+                # Consumer is slower than the nominal rate. Resync rather than
+                # accumulating debt and then bursting to catch up.
+                next_at = time.perf_counter()
+                await asyncio.sleep(0)

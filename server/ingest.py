@@ -77,6 +77,7 @@ class IngestStats:
         self.last_seq: Optional[int] = None
         self.last_res: Optional[tuple] = None
         self.res_changes = 0
+        self.hires = 0
         self.t0 = time.time()
         self._last_report = self.t0
         self._since_report = 0
@@ -99,6 +100,13 @@ class IngestStats:
             if missing > 0:
                 self.gaps += missing
         self.last_seq = seq
+
+        # Full-resolution photo injections legitimately differ in size from the
+        # video stream. Counting them as ladder events would emit a spurious
+        # "RESOLUTION CHANGED" per photo and bury the real bandwidth signal.
+        if frame.header.fmt == "jpeg-hires":
+            self.hires += 1
+            return
 
         res = (frame.image.shape[1], frame.image.shape[0])
         if res != self.last_res:
@@ -124,18 +132,26 @@ class IngestStats:
         self._last_report = now
         self._since_report = 0
 
-    def summary(self) -> None:
+    def summary(self, preview: bool = False) -> None:
         p50, p99 = self.latency.percentiles()
         dur = max(time.time() - self.t0, 1e-6)
         print("\n=== ingest summary ===")
         print("frames        : %d in %.1fs (%.1f fps avg)" % (self.count, dur, self.count / dur))
         print("dropped seq   : %d" % self.gaps)
         print("res changes   : %d" % self.res_changes)
+        if self.hires:
+            print("hi-res photos : %d injected keyframes" % self.hires)
         print("latency above floor : p50 %.1f ms | p99 %.1f ms" % (p50 * 1e3, p99 * 1e3))
         if self.latency.offset is not None:
             print("(clock offset + best-case latency was %.1f ms; absolute "
                   "latency is that floor plus the figures above)"
                   % (self.latency.offset * 1e3))
+        if preview:
+            print("NOTE: --preview was on. cv2.imshow costs ~95 ms/call on Apple\n"
+                  "      Silicon and must run on the main thread, so it cannot be\n"
+                  "      threaded off the hot path. The framerate above measures\n"
+                  "      the preview window as much as the pipeline. Re-run\n"
+                  "      without --preview for a real throughput number.")
 
 
 def build_source(args) -> FrameSource:
@@ -169,6 +185,8 @@ async def run(args) -> None:
     undistort = Undistorter(intr) if intr is not None else None
     stats = IngestStats()
     stop = asyncio.Event()
+    preview_period = 1.0 / max(args.preview_fps, 0.1)
+    last_preview = 0.0
 
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -184,7 +202,13 @@ async def run(args) -> None:
             stats.update(frame)
             image = undistort(frame.image) if undistort is not None else frame.image
 
-            if args.preview:
+            # Preview is throttled, not run per-frame. cv2.imshow + waitKey costs
+            # ~95 ms per call on Apple Silicon, which would cap the whole loop at
+            # ~10 fps and make every throughput number a measurement of the
+            # preview window rather than of the pipeline. Drawing a few times a
+            # second is enough to eyeball the stream.
+            if args.preview and (frame.ts_recv - last_preview) >= preview_period:
+                last_preview = frame.ts_recv
                 shown = image
                 if shown.shape[0] > 900:  # portrait 1280 does not fit most screens
                     scale = 900.0 / shown.shape[0]
@@ -198,7 +222,7 @@ async def run(args) -> None:
         await source.close()
         if args.preview:
             cv2.destroyAllWindows()
-        stats.summary()
+        stats.summary(preview=args.preview)
 
 
 def main() -> int:
@@ -213,6 +237,9 @@ def main() -> int:
     ap.add_argument("--calib", default=DEFAULT_PATH)
     ap.add_argument("--no-undistort", action="store_true")
     ap.add_argument("--preview", action="store_true")
+    ap.add_argument("--preview-fps", type=float, default=6.0,
+                    help="preview redraw rate; kept low because imshow costs "
+                         "~95 ms/frame on Apple Silicon and would throttle ingest")
     args = ap.parse_args()
 
     try:
