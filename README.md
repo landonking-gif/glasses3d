@@ -99,8 +99,10 @@ that gets tested.
 
 ## Walking through your world
 
-`viewer/walkthrough.html` - open it, drop `points.ply` on it. Self-contained
-WebGL, no dependencies, no server, nothing uploaded.
+**Hosted:** https://claude.ai/code/artifact/a5bf81c6-c858-4459-adac-0641ba1db3ad
+
+Or `viewer/walkthrough.html` locally - same file. Self-contained WebGL2, no
+dependencies, no server, nothing uploaded.
 
 ```
 W A S D  move        mouse  look          shift  sprint

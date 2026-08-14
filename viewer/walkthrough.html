@@ -1,12 +1,18 @@
 <title>World Walkthrough</title>
 <style>
+  /* Deliberately single-theme, and dark on purpose rather than by omission.
+     This is a viewport, not a document: the WebGL canvas clears to a fixed dark
+     ground so reconstructed colour reads at its true value, and a light chrome
+     would sit on that dark viewport as a mismatched frame. Every colour is
+     painted explicitly from a token so the page holds on either host ground. */
   :root {
-    --bg: #0d0f14; --panel: rgba(18,21,28,.88); --line: rgba(255,255,255,.12);
-    --fg: #e8eaf0; --dim: #8b93a7; --accent: #6ea8fe;
-  }
-  :root[data-theme="light"] {
-    --bg: #eef1f6; --panel: rgba(255,255,255,.9); --line: rgba(0,0,0,.12);
-    --fg: #1a1d24; --dim: #5a6273; --accent: #2563c9;
+    --bg: #0a0c11;          /* near-black, biased blue toward the accent */
+    --panel: rgba(17,21,29,.86);
+    --line: rgba(150,180,210,.16);
+    --fg: #e4e8f0;
+    --dim: #79839a;
+    --accent: #57c7d4;      /* cool cyan - the vernacular of depth sensing */
+    --danger: #ff9a9a;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
@@ -15,9 +21,11 @@
   .panel { position: fixed; background: var(--panel); border: 1px solid var(--line);
            border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(12px); }
   #hud { top: 14px; left: 14px; max-width: 300px; }
-  #hud h1 { margin: 0 0 8px; font-size: 14px; letter-spacing: .3px; }
+  #hud h1 { margin: 0 0 10px; font-size: 11px; letter-spacing: .12em;
+          text-transform: uppercase; color: var(--accent); font-weight: 600; }
   #hud .row { display: flex; justify-content: space-between; gap: 14px; color: var(--dim); }
-  #hud .row b { color: var(--fg); font-weight: 600; }
+  #hud .row b { color: var(--fg); font-weight: 600;
+              font-variant-numeric: tabular-nums; }
   #keys { bottom: 14px; left: 14px; color: var(--dim); }
   #keys kbd { background: rgba(127,127,127,.18); border: 1px solid var(--line);
               border-radius: 4px; padding: 1px 5px; color: var(--fg); font-size: 11px; }
@@ -25,15 +33,19 @@
           background: var(--bg); z-index: 10; padding: 24px; }
   #drop.hide { display: none; }
   #drop .inner { border: 2px dashed var(--line); border-radius: 16px; padding: 48px 56px;
-                 max-width: 560px; }
-  #drop h2 { margin: 0 0 10px; font-size: 20px; }
-  #drop p { color: var(--dim); margin: 6px 0; }
-  #drop button { margin-top: 18px; background: var(--accent); color: #fff; border: 0;
+                 max-width: 560px; display: grid; gap: 8px; justify-items: center; }
+  #drop h2 { margin: 0 0 4px; font-size: 21px; font-weight: 600;
+             letter-spacing: -.01em; text-wrap: balance; }
+  #drop p { color: var(--dim); margin: 0; max-width: 46ch; }
+  #drop button { margin-top: 10px; background: var(--accent); color: #04262b; border: 0;
                  padding: 10px 20px; border-radius: 8px; font: inherit; font-weight: 600;
                  cursor: pointer; }
+  #drop button:hover { filter: brightness(1.12); }
+  #drop button:focus-visible, #pick:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px; }
   #drop.over .inner { border-color: var(--accent); }
-  #err { color: #ff8b8b; margin-top: 10px; min-height: 18px; }
-  .tag { display: inline-block; background: rgba(110,168,254,.16); color: var(--accent);
+  #err { color: var(--danger); margin-top: 10px; min-height: 18px; }
+  .tag { display: inline-block; background: rgba(87,199,212,.14); color: var(--accent);
          border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 </style>
 
@@ -59,7 +71,7 @@
 
 <div id="drop">
   <div class="inner">
-    <h2>Load your world</h2>
+    <h2>Drop your world in</h2>
     <p>Drop a <span class="tag">.ply</span> from your reconstruction -
        <code>scene.ply</code> or <code>points.ply</code>.</p>
     <p>Nothing is uploaded. The file is parsed in this tab.</p>
@@ -403,7 +415,7 @@ function tick(now) {
     const target = [cam.pos[0]+f[0], cam.pos[1]+f[1], cam.pos[2]+f[2]];
 
     resize();
-    gl.clearColor(0.05, 0.06, 0.08, 1);
+    gl.clearColor(0.039, 0.047, 0.067, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const proj = M4.perspective(Math.PI/3, canvas.width/canvas.height,
                                 Math.max(bounds.size*0.001, 0.01), bounds.size*20);
