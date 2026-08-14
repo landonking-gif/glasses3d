@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 from typing import List, Optional, Sequence
@@ -28,6 +29,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from blender_export import write_blender_script, write_output_readme  # noqa: E402
 from backends import (APACHE_MODEL, MockReconstructor, NC_MODEL,  # noqa: E402
                       Reconstructor, ReconstructionResult, describe_gpu)
 from calibration import Intrinsics, Undistorter, DEFAULT_PATH  # noqa: E402
@@ -173,11 +175,26 @@ def run(args) -> int:
     with open(os.path.join(args.out, "meta.json"), "w") as fh:
         json.dump(meta, fh, indent=2)
 
-    print("\nwrote:\n  %s\n  %s\n  %s" % (cloud, scene, graph))
-    print("\n%d splats in %.1fs. Open scene.ply at superspl.at/editor to check it."
-          % (len(splats), meta["seconds"]))
+    # Ship the viewer and the Blender script alongside the geometry, so the
+    # output folder is self-contained rather than a pile of PLYs whose
+    # instructions live somewhere else.
+    blender = write_blender_script(args.out, "points.ply", up_axis=args.up_axis)
+    write_output_readme(args.out)
+    viewer_src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "viewer", "walkthrough.html")
+    viewer = os.path.join(args.out, "walkthrough.html")
+    if os.path.exists(viewer_src):
+        shutil.copyfile(viewer_src, viewer)
+
+    print("\nwrote:\n  %s\n  %s\n  %s\n  %s" % (cloud, scene, graph, blender))
+    if os.path.exists(viewer):
+        print("  %s" % viewer)
+    print("\n%d splats in %.1fs." % (len(splats), meta["seconds"]))
+    print("\nWALK THROUGH IT: open walkthrough.html and drop points.ply on it.")
+    print("BLENDER:         Scripting tab > Open > open_in_blender.py > Run Script")
+    print("WEB SPLATS:      drag scene.ply onto superspl.at/editor")
     if len(splats) > 400_000:
-        print("NOTE: %d splats exceeds the ~400k Quest budget for 72fps. "
+        print("\nNOTE: %d splats exceeds the ~400k Quest budget for 72fps. "
               "Lower --max-points before targeting VR." % len(splats))
     return 0
 
@@ -199,6 +216,8 @@ def main() -> int:
     ap.add_argument("--splat-radius", type=float, default=0.012)
     ap.add_argument("--calib", default=DEFAULT_PATH)
     ap.add_argument("--no-undistort", action="store_true")
+    ap.add_argument("--up-axis", choices=["Y", "Z"], default="Y",
+                    help="source up-axis; Blender is Z-up so Y needs rotating")
     return run(ap.parse_args())
 
 

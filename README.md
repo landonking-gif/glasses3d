@@ -86,14 +86,58 @@ never saw, with the same caveat as Voyager: plausible fills, not measurements.
 | M4b — dynamic objects | **world model + pipeline done and tested**; SAM 3 / FoundationPose need CUDA |
 | M5 — export | **done, tested** — 3DGS PLY + scene graph |
 | Colab | **notebook validated**; models unrun |
+| Walkthrough viewer | **done, tested in-browser** - WASD, 1st/3rd person |
+| Blender export | **script generated + syntax-checked**; unrun (no Blender here) |
 
-148 tests pass locally. Everything model-dependent sits behind an interface with
+165 tests pass locally. Everything model-dependent sits behind an interface with
 a working mock, so the surrounding logic is verified even where the models are not.
 
 **Still genuinely unverified:** no neural model in this repo has ever executed.
 MapAnything, SAM 3, FoundationPose and MASt3R-SLAM are all written against their
 documented APIs and exercised only through mocks. First real Colab run is where
 that gets tested.
+
+## Walking through your world
+
+`viewer/walkthrough.html` - open it, drop `points.ply` on it. Self-contained
+WebGL, no dependencies, no server, nothing uploaded.
+
+```
+W A S D  move        mouse  look          shift  sprint
+space/C  up / down   V      1st/3rd person
+U        cycle up-axis (if the world is on its side)
+[ ]      point size  R      reset         esc    release cursor
+```
+
+It **starts you inside the room**. That needs a decision the file cannot state:
+whether the cloud is a hollow space you stand in or a solid object you orbit.
+The viewer measures what fraction of points sit near a face of the bounding box
+- a room is walls, floor and ceiling, so nearly everything is on a face (~0.93
+measured), while an object's surface curves away from the box (~0.58 for a
+sphere). Above 0.65 it stands you in the middle at eye height; below, it backs
+off and frames the object.
+
+The first attempt tested for *emptiness at the centre* instead, and got it
+wrong: a room with a desk in the middle is not empty at the centre, so every
+furnished room was classified as an object and the walkthrough started outside,
+staring at the back of a wall.
+
+## Does it output a .blend?
+
+No - and nothing can, outside Blender. The `.blend` format is written only by
+Blender's own Python API, so a pipeline that does not embed Blender cannot emit
+one. What you get instead:
+
+- **`points.ply`** imports natively: File > Import > Stanford PLY.
+- **`open_in_blender.py`**, generated next to it. Scripting tab > Open > Run
+  Script. Two things a bare import gets wrong that this fixes: the scene lands
+  **on its side** (Blender is Z-up, reconstruction is Y-up) and renders as
+  **nothing** (a vertices-only mesh has no surface to shade, so it needs a
+  Geometry Nodes tree to become renderable points).
+- For an actual file: `blender --background --python open_in_blender.py --save-as world.blend`
+
+`scene.ply` is Gaussian splats and needs the KIRI 3DGS Render add-on; the
+native path is `points.ply`.
 
 ## Running it on Colab
 
@@ -176,6 +220,8 @@ server/perception.py   SAM 3 / FoundationPose adapters + mocks + pipeline
 server/export.py       3DGS PLY, point cloud, scene graph, scene baking
 server/backends.py     CUDA model adapters (MapAnything) + GPU capability probe
 server/reconstruct.py  offline driver: video in, scene.ply out
+server/blender_export.py  generates the Blender setup script + output README
+viewer/walkthrough.html   self-contained WebGL walkthrough
 colab/                 Colab notebook (offline + live modes)
 ios/Glasses3DRelay.swift   phone relay, compiles against DAT SDK 0.4.0
 ios/verify-build.sh        proves it compiles, without touching VisionClaw
@@ -206,6 +252,7 @@ python3 tools/mock_sender.py --ladder
 
 ```bash
 for t in tracker worldmodel perception export reconstruct calibration; do python3 tools/test_$t.py; done
+python3 tools/make_viewer_fixtures.py && node tools/test_viewer.mjs
 ```
 
 `test_calibration.py` takes a couple of minutes — it runs genuine corner

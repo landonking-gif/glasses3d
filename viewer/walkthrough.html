@@ -1,0 +1,509 @@
+<title>World Walkthrough</title>
+<style>
+  :root {
+    --bg: #0d0f14; --panel: rgba(18,21,28,.88); --line: rgba(255,255,255,.12);
+    --fg: #e8eaf0; --dim: #8b93a7; --accent: #6ea8fe;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef1f6; --panel: rgba(255,255,255,.9); --line: rgba(0,0,0,.12);
+    --fg: #1a1d24; --dim: #5a6273; --accent: #2563c9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
+         font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(12px); }
+  #hud { top: 14px; left: 14px; max-width: 300px; }
+  #hud h1 { margin: 0 0 8px; font-size: 14px; letter-spacing: .3px; }
+  #hud .row { display: flex; justify-content: space-between; gap: 14px; color: var(--dim); }
+  #hud .row b { color: var(--fg); font-weight: 600; }
+  #keys { bottom: 14px; left: 14px; color: var(--dim); }
+  #keys kbd { background: rgba(127,127,127,.18); border: 1px solid var(--line);
+              border-radius: 4px; padding: 1px 5px; color: var(--fg); font-size: 11px; }
+  #drop { position: fixed; inset: 0; display: grid; place-items: center; text-align: center;
+          background: var(--bg); z-index: 10; padding: 24px; }
+  #drop.hide { display: none; }
+  #drop .inner { border: 2px dashed var(--line); border-radius: 16px; padding: 48px 56px;
+                 max-width: 560px; }
+  #drop h2 { margin: 0 0 10px; font-size: 20px; }
+  #drop p { color: var(--dim); margin: 6px 0; }
+  #drop button { margin-top: 18px; background: var(--accent); color: #fff; border: 0;
+                 padding: 10px 20px; border-radius: 8px; font: inherit; font-weight: 600;
+                 cursor: pointer; }
+  #drop.over .inner { border-color: var(--accent); }
+  #err { color: #ff8b8b; margin-top: 10px; min-height: 18px; }
+  .tag { display: inline-block; background: rgba(110,168,254,.16); color: var(--accent);
+         border-radius: 4px; padding: 1px 6px; font-size: 11px; }
+</style>
+
+<canvas id="gl"></canvas>
+
+<div id="hud" class="panel" hidden>
+  <h1>World Walkthrough</h1>
+  <div class="row"><span>points</span><b id="s-pts">-</b></div>
+  <div class="row"><span>view</span><b id="s-view">third person</b></div>
+  <div class="row"><span>up axis</span><b id="s-up">+Y</b></div>
+  <div class="row"><span>position</span><b id="s-pos">-</b></div>
+  <div class="row"><span>mode</span><b id="s-mode">-</b></div>
+  <div class="row"><span>fps</span><b id="s-fps">-</b></div>
+</div>
+
+<div id="keys" class="panel" hidden>
+  <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp;
+  <kbd>mouse</kbd> look &nbsp; <kbd>shift</kbd> sprint &nbsp;
+  <kbd>space</kbd>/<kbd>C</kbd> up/down<br>
+  <kbd>V</kbd> 1st/3rd person &nbsp; <kbd>U</kbd> up-axis &nbsp;
+  <kbd>[</kbd><kbd>]</kbd> point size &nbsp; <kbd>R</kbd> reset &nbsp; <kbd>esc</kbd> release
+</div>
+
+<div id="drop">
+  <div class="inner">
+    <h2>Load your world</h2>
+    <p>Drop a <span class="tag">.ply</span> from your reconstruction -
+       <code>scene.ply</code> or <code>points.ply</code>.</p>
+    <p>Nothing is uploaded. The file is parsed in this tab.</p>
+    <button id="pick">Choose file</button>
+    <input id="file" type="file" accept=".ply" hidden>
+    <div id="err"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// PLY parsing
+//
+// Handles both files the pipeline emits. They differ in how colour is stored:
+// a plain cloud carries uchar red/green/blue, while the 3DGS file carries
+// f_dc_0..2, which are spherical-harmonic degree-0 coefficients rather than
+// colours. Reading f_dc as if it were RGB produces a washed-out grey scene, so
+// the SH constant has to be undone: rgb = 0.5 + SH_C0 * f_dc.
+// ---------------------------------------------------------------------------
+const SH_C0 = 0.28209479177387814;
+const TYPE_SIZES = { char:1, uchar:1, int8:1, uint8:1, short:2, ushort:2, int16:2,
+                     uint16:2, int:4, uint:4, int32:4, uint32:4, float:4, float32:4,
+                     double:8, float64:8 };
+
+function parsePLY(buffer) {
+  const bytes = new Uint8Array(buffer);
+  // Find the header terminator without decoding the whole (possibly huge) file.
+  const needle = "end_header\n";
+  let headerEnd = -1;
+  const probe = new TextDecoder("ascii").decode(bytes.subarray(0, Math.min(bytes.length, 65536)));
+  const idx = probe.indexOf(needle);
+  if (idx === -1) throw new Error("not a PLY file, or header longer than 64KB");
+  headerEnd = idx + needle.length;
+
+  const header = probe.slice(0, idx);
+  const lines = header.split("\n").map(l => l.trim());
+  let format = "", count = 0;
+  const props = [];
+  for (const line of lines) {
+    if (line.startsWith("format")) format = line.split(/\s+/)[1];
+    else if (line.startsWith("element vertex")) count = parseInt(line.split(/\s+/)[2], 10);
+    else if (line.startsWith("element ") && !line.includes("vertex")) break; // other elements: ignore
+    else if (line.startsWith("property ")) {
+      const p = line.split(/\s+/);
+      if (p[1] === "list") throw new Error("list properties are not supported");
+      props.push({ type: p[1], name: p[2] });
+    }
+  }
+  if (!count) throw new Error("no vertices found");
+
+  const names = props.map(p => p.name);
+  const has = n => names.includes(n);
+  const stride = props.reduce((s, p) => s + (TYPE_SIZES[p.type] || 4), 0);
+  const offsets = {};
+  let o = 0;
+  for (const p of props) { offsets[p.name] = { off: o, type: p.type }; o += TYPE_SIZES[p.type] || 4; }
+
+  const positions = new Float32Array(count * 3);
+  const colors = new Uint8Array(count * 3);
+
+  if (format === "ascii") {
+    const text = new TextDecoder("ascii").decode(bytes.subarray(headerEnd));
+    const toks = text.split(/\s+/).filter(Boolean);
+    for (let i = 0; i < count; i++) {
+      const base = i * props.length;
+      const get = n => parseFloat(toks[base + names.indexOf(n)]);
+      positions[i*3] = get("x"); positions[i*3+1] = get("y"); positions[i*3+2] = get("z");
+      readColor(colors, i, has, get);
+    }
+    return { positions, colors, count };
+  }
+
+  const little = format !== "binary_big_endian";
+  const view = new DataView(buffer, headerEnd);
+  const read = (base, name) => {
+    const p = offsets[name];
+    if (!p) return 0;
+    const at = base + p.off;
+    switch (p.type) {
+      case "float": case "float32": return view.getFloat32(at, little);
+      case "double": case "float64": return view.getFloat64(at, little);
+      case "uchar": case "uint8": return view.getUint8(at);
+      case "char": case "int8": return view.getInt8(at);
+      case "ushort": case "uint16": return view.getUint16(at, little);
+      case "short": case "int16": return view.getInt16(at, little);
+      case "uint": case "uint32": return view.getUint32(at, little);
+      default: return view.getInt32(at, little);
+    }
+  };
+
+  const need = count * stride;
+  if (view.byteLength < need)
+    throw new Error(`file is truncated: header claims ${count} vertices (${need} bytes) but only ${view.byteLength} remain`);
+
+  for (let i = 0; i < count; i++) {
+    const base = i * stride;
+    positions[i*3]   = read(base, "x");
+    positions[i*3+1] = read(base, "y");
+    positions[i*3+2] = read(base, "z");
+    readColor(colors, i, has, n => read(base, n));
+  }
+  return { positions, colors, count };
+}
+
+function readColor(colors, i, has, get) {
+  let r, g, b;
+  if (has("red")) { r = get("red"); g = get("green"); b = get("blue"); }
+  else if (has("f_dc_0")) {
+    // Undo the SH degree-0 encoding. Without this the whole scene reads grey.
+    r = (0.5 + SH_C0 * get("f_dc_0")) * 255;
+    g = (0.5 + SH_C0 * get("f_dc_1")) * 255;
+    b = (0.5 + SH_C0 * get("f_dc_2")) * 255;
+  } else { r = g = b = 180; }
+  colors[i*3]   = Math.max(0, Math.min(255, r));
+  colors[i*3+1] = Math.max(0, Math.min(255, g));
+  colors[i*3+2] = Math.max(0, Math.min(255, b));
+}
+
+// ---------------------------------------------------------------------------
+// Minimal 4x4 maths. Written out rather than pulled from a library because the
+// page must be fully self-contained - no CDN, no external fetches.
+// ---------------------------------------------------------------------------
+const M4 = {
+  perspective(fovy, aspect, near, far) {
+    const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+    return new Float32Array([f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0]);
+  },
+  lookAt(eye, target, up) {
+    const z = norm(sub(eye, target)), x = norm(cross(up, z)), y = cross(z, x);
+    return new Float32Array([
+      x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0,
+      -dot(x,eye), -dot(y,eye), -dot(z,eye), 1]);
+  },
+  mul(a, b) {
+    const out = new Float32Array(16);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+      let s = 0;
+      for (let k = 0; k < 4; k++) s += a[k*4+j] * b[i*4+k];
+      out[i*4+j] = s;
+    }
+    return out;
+  },
+};
+const sub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const norm = a => { const l = Math.hypot(...a) || 1; return [a[0]/l, a[1]/l, a[2]/l]; };
+
+// ---------------------------------------------------------------------------
+// Renderer
+// ---------------------------------------------------------------------------
+const canvas = document.getElementById("gl");
+const gl = canvas.getContext("webgl2", { antialias: true, alpha: false });
+if (!gl) { document.getElementById("err").textContent = "WebGL2 unavailable in this browser."; }
+
+const VS = `#version 300 es
+in vec3 aPos; in vec3 aCol;
+uniform mat4 uMVP; uniform float uSize; uniform vec3 uEye;
+out vec3 vCol; out float vFade;
+void main() {
+  vCol = aCol;
+  vec4 clip = uMVP * vec4(aPos, 1.0);
+  gl_Position = clip;
+  float d = distance(aPos, uEye);
+  // Attenuate with distance so density reads as depth rather than as a flat
+  // wall of pixels; clamped so distant points stay visible and near ones do
+  // not swell into blobs.
+  gl_PointSize = clamp(uSize / max(d, 0.05), 1.0, 24.0);
+  vFade = clamp(1.0 - d / 60.0, 0.15, 1.0);
+}`;
+
+const FS = `#version 300 es
+precision mediump float;
+in vec3 vCol; in float vFade;
+out vec4 frag;
+void main() {
+  // Round points; discarding the corners of the gl_Point square avoids the
+  // lego-brick look that makes point clouds read as noise.
+  vec2 d = gl_PointCoord - vec2(0.5);
+  if (dot(d, d) > 0.25) discard;
+  frag = vec4(vCol * vFade, 1.0);
+}`;
+
+function shader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+let prog, uMVP, uSize, uEye, vao, pointCount = 0;
+
+function initGL() {
+  prog = gl.createProgram();
+  gl.attachShader(prog, shader(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  uMVP = gl.getUniformLocation(prog, "uMVP");
+  uSize = gl.getUniformLocation(prog, "uSize");
+  uEye = gl.getUniformLocation(prog, "uEye");
+  gl.enable(gl.DEPTH_TEST);
+}
+
+function upload(positions, colors, count) {
+  vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const pb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, pb);
+  gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(prog, "aPos");
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
+  const cb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+  gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+  const aCol = gl.getAttribLocation(prog, "aCol");
+  gl.enableVertexAttribArray(aCol);
+  gl.vertexAttribPointer(aCol, 3, gl.UNSIGNED_BYTE, true, 0, 0);  // normalise 0..255
+  gl.bindVertexArray(null);
+  pointCount = count;
+}
+
+// ---------------------------------------------------------------------------
+// Camera + controls
+// ---------------------------------------------------------------------------
+const cam = {
+  pos: [0, 1.6, 4], yaw: 0, pitch: -0.15,
+  speed: 2.6, size: 420, thirdPerson: true, dist: 3.2,
+};
+let upAxis = 1, upSign = 1;        // 0=X 1=Y 2=Z
+let bounds = null, home = null, interior = false;
+const keys = new Set();
+
+function upVec() { const v = [0,0,0]; v[upAxis] = upSign; return v; }
+
+function forwardVec() {
+  // Build a forward direction in a frame whose "up" is the chosen axis. The
+  // reconstruction's up axis is not knowable in advance - different models use
+  // different conventions - so it is a runtime choice rather than a constant.
+  const u = upVec();
+  const ref = Math.abs(u[1]) > 0.9 ? [0,0,-1] : [0,1,0];
+  const right = norm(cross(ref, u));
+  const fwd = cross(u, right);
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const horiz = [fwd[0]*cy + right[0]*sy, fwd[1]*cy + right[1]*sy, fwd[2]*cy + right[2]*sy];
+  return norm([horiz[0]*cp + u[0]*sp, horiz[1]*cp + u[1]*sp, horiz[2]*cp + u[2]*sp]);
+}
+
+function frame(positions, count) {
+  // Percentile bounds, not min/max: feed-forward reconstruction leaves a few
+  // far-flung outliers, and framing to the true extent would put the camera so
+  // far away the actual room is a speck.
+  const axes = [[], [], []];
+  const step = Math.max(1, Math.floor(count / 20000));
+  for (let i = 0; i < count; i += step)
+    for (let a = 0; a < 3; a++) axes[a].push(positions[i*3+a]);
+  const pct = (arr, p) => { arr.sort((x,y) => x-y); return arr[Math.floor(arr.length*p)]; };
+  const lo = axes.map(a => pct(a.slice(), 0.02));
+  const hi = axes.map(a => pct(a.slice(), 0.98));
+  const centre = [0,1,2].map(a => (lo[a]+hi[a])/2);
+  const size = Math.max(...[0,1,2].map(a => hi[a]-lo[a]), 0.5);
+  bounds = { lo, hi, centre, size };
+
+  // Interior or exterior? A room scan is a hollow shell, so the centre is empty
+  // and standing there is exactly right. An object scan is solid at the centre,
+  // where standing would put you inside the object. Backing off unconditionally
+  // starts a room walkthrough outside, staring at the back of a wall - which is
+  // what this looked like before. So measure it: count points near the centre
+  // against what a uniform distribution would put there.
+  // Measure how much of the cloud lies on the *shell* - near a face of the
+  // bounding box. A room is walls, floor and ceiling, so nearly everything sits
+  // on a face. A scanned object's surface curves away from the box, so much
+  // less does.
+  //
+  // The first attempt here tested emptiness at the centre instead, and got it
+  // wrong: a room with a desk in the middle is not empty at the centre, so
+  // every furnished room was misread as a solid object and the walkthrough
+  // started outside, staring at the back of a wall.
+  let onShell = 0, sampled = 0;
+  const span = [0,1,2].map(a => Math.max(hi[a]-lo[a], 1e-6));
+  for (let i = 0; i < count; i += step) {
+    sampled++;
+    let nearest = 1;
+    for (let a = 0; a < 3; a++) {
+      const t = (positions[i*3+a] - lo[a]) / span[a];       // 0..1 across the box
+      nearest = Math.min(nearest, Math.min(Math.abs(t), Math.abs(1 - t)));
+    }
+    if (nearest < 0.08) onShell++;
+  }
+  const hollow = sampled > 0 && (onShell / sampled) > 0.65;
+
+  const u = upVec();
+  const f = forwardVec();
+  if (hollow) {
+    // Stand in the middle at roughly eye height above the floor.
+    cam.pos = centre.slice();
+    cam.pos[upAxis] = lo[upAxis] + Math.min(1.6, (hi[upAxis]-lo[upAxis]) * 0.55);
+    cam.speed = Math.max(0.8, size * 0.18);
+    cam.dist = Math.min(1.2, size * 0.06);
+  } else {
+    cam.pos = centre.slice();
+    cam.pos[upAxis] = lo[upAxis] + size * 0.35;
+    const back = size * 0.9;
+    cam.pos = [cam.pos[0]-f[0]*back, cam.pos[1]-f[1]*back, cam.pos[2]-f[2]*back];
+    cam.speed = Math.max(0.6, size * 0.35);
+    cam.dist = size * 0.12;
+  }
+  interior = hollow;
+  home = { pos: cam.pos.slice(), yaw: cam.yaw, pitch: cam.pitch };
+}
+
+let last = performance.now(), fpsAcc = 0, fpsN = 0;
+function tick(now) {
+  const dt = Math.min((now - last) / 1000, 0.1); last = now;
+  fpsAcc += 1/Math.max(dt,1e-4); fpsN++;
+  if (fpsN >= 20) { $("s-fps").textContent = (fpsAcc/fpsN).toFixed(0); fpsAcc = 0; fpsN = 0; }
+
+  if (pointCount) {
+    const f = forwardVec(), u = upVec();
+    const r = norm(cross(f, u));
+    let v = cam.speed * dt * (keys.has("shift") ? 3.5 : 1);
+    const move = (d, s) => { cam.pos[0]+=d[0]*s; cam.pos[1]+=d[1]*s; cam.pos[2]+=d[2]*s; };
+    if (keys.has("w")) move(f, v);
+    if (keys.has("s")) move(f, -v);
+    if (keys.has("d")) move(r, v);
+    if (keys.has("a")) move(r, -v);
+    if (keys.has(" ")) move(u, v);
+    if (keys.has("c")) move(u, -v);
+
+    // Third person: the camera sits behind and slightly above the point you are
+    // steering, so you see your world *and* your position in it.
+    const eye = cam.thirdPerson
+      ? [cam.pos[0]-f[0]*cam.dist + u[0]*cam.dist*0.35,
+         cam.pos[1]-f[1]*cam.dist + u[1]*cam.dist*0.35,
+         cam.pos[2]-f[2]*cam.dist + u[2]*cam.dist*0.35]
+      : cam.pos;
+    const target = [cam.pos[0]+f[0], cam.pos[1]+f[1], cam.pos[2]+f[2]];
+
+    resize();
+    gl.clearColor(0.05, 0.06, 0.08, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const proj = M4.perspective(Math.PI/3, canvas.width/canvas.height,
+                                Math.max(bounds.size*0.001, 0.01), bounds.size*20);
+    const mvp = M4.mul(proj, M4.lookAt(eye, target, u));
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(uMVP, false, mvp);
+    gl.uniform1f(uSize, cam.size);
+    gl.uniform3fv(uEye, new Float32Array(eye));
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.POINTS, 0, pointCount);
+
+    $("s-pos").textContent = cam.pos.map(n => n.toFixed(1)).join(", ");
+  }
+  requestAnimationFrame(tick);
+}
+
+function resize() {
+  const w = Math.floor(canvas.clientWidth * devicePixelRatio);
+  const h = Math.floor(canvas.clientHeight * devicePixelRatio);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w; canvas.height = h;
+    gl.viewport(0, 0, w, h);
+  }
+}
+
+const $ = id => document.getElementById(id);
+
+addEventListener("keydown", e => {
+  const k = e.key.toLowerCase();
+  keys.add(k === "shift" ? "shift" : k);
+  if (k === "v") { cam.thirdPerson = !cam.thirdPerson;
+    $("s-view").textContent = cam.thirdPerson ? "third person" : "first person"; }
+  if (k === "u") {
+    // Cycle through the six up-axis options. Which one is correct depends on
+    // the reconstruction's convention, and eyeballing it is faster than
+    // guessing from metadata.
+    if (upSign === 1) upSign = -1; else { upSign = 1; upAxis = (upAxis+1) % 3; }
+    $("s-up").textContent = (upSign > 0 ? "+" : "-") + "XYZ"[upAxis];
+  }
+  if (k === "[") cam.size = Math.max(80, cam.size / 1.3);
+  if (k === "]") cam.size = Math.min(9000, cam.size * 1.3);
+  if (k === "r" && home) { cam.pos = home.pos.slice(); cam.yaw = home.yaw; cam.pitch = home.pitch; }
+  if ([" ", "w","a","s","d"].includes(k)) e.preventDefault();
+});
+addEventListener("keyup", e => keys.delete(e.key.toLowerCase() === "shift" ? "shift" : e.key.toLowerCase()));
+addEventListener("blur", () => keys.clear());
+
+canvas.addEventListener("click", () => canvas.requestPointerLock());
+addEventListener("mousemove", e => {
+  if (document.pointerLockElement !== canvas) return;
+  cam.yaw -= e.movementX * 0.0022;
+  cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch - e.movementY * 0.0022));
+});
+
+// ---------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------
+async function load(file) {
+  $("err").textContent = "";
+  try {
+    const buf = await file.arrayBuffer();
+    const { positions, colors, count } = parsePLY(buf);
+    if (!prog) initGL();
+    upload(positions, colors, count);
+    frame(positions, count);
+    $("s-pts").textContent = count.toLocaleString();
+    $("s-mode").textContent = interior ? "interior" : "exterior";
+    $("drop").classList.add("hide");
+    $("hud").hidden = false; $("keys").hidden = false;
+    canvas.requestPointerLock();
+  } catch (err) {
+    $("err").textContent = err.message;
+  }
+}
+
+// ?src=<url> auto-loads, so a hosted scene can be linked directly. Fetch is
+// same-origin unless the host sends CORS headers; failures report why rather
+// than leaving a blank screen.
+const src = new URLSearchParams(location.search).get("src");
+if (src) {
+  $("err").textContent = "loading " + src + " ...";
+  fetch(src)
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${src}`); return r.blob(); })
+    .then(b => load(new File([b], "scene.ply")))
+    .catch(e => { $("err").textContent = e.message + " - drop the file in instead."; });
+}
+
+$("pick").onclick = () => $("file").click();
+$("file").onchange = e => e.target.files[0] && load(e.target.files[0]);
+const drop = $("drop");
+["dragenter","dragover"].forEach(t => drop.addEventListener(t, e => {
+  e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(t => drop.addEventListener(t, e => {
+  e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => e.dataTransfer.files[0] && load(e.dataTransfer.files[0]));
+addEventListener("dragover", e => e.preventDefault());
+addEventListener("drop", e => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]);
+});
+
+requestAnimationFrame(tick);
+</script>

@@ -23,3 +23,7 @@ ios/**/DerivedData/
 
 # SPM build products from ios/verify-build.sh
 ios/Glasses3DRelayKit/.build*/
+
+# viewer test fixtures + local test scenes
+tools/fixtures/
+viewer/*.ply
