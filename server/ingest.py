@@ -195,10 +195,29 @@ async def run(args) -> None:
         except NotImplementedError:
             pass
 
+    # Race the frame iterator against the stop event rather than checking
+    # `stop.is_set()` inside `async for`. That check only runs once a frame has
+    # ALREADY arrived, so an idle source (glasses connected but not streaming,
+    # ws client silent) left this blocked in __anext__ forever and Ctrl-C /
+    # SIGTERM did nothing but set an Event nobody read. Verified 2026-08-15:
+    # with an idle source the old shape survived SIGTERM indefinitely; this
+    # shape exits cleanly on both SIGTERM and SIGINT, and still drains a
+    # finite source normally.
+    frames = source.frames().__aiter__()
+    stop_task = asyncio.ensure_future(stop.wait())
+    next_task = None
     try:
-        async for frame in source.frames():
-            if stop.is_set():
+        while True:
+            next_task = asyncio.ensure_future(frames.__anext__())
+            done, _ = await asyncio.wait({next_task, stop_task},
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if stop_task in done:
                 break
+            try:
+                frame = next_task.result()
+            except StopAsyncIteration:
+                break
+
             stats.update(frame)
             image = undistort(frame.image) if undistort is not None else frame.image
 
@@ -219,6 +238,18 @@ async def run(args) -> None:
 
             stats.maybe_report()
     finally:
+        stop_task.cancel()
+        # Let the cancelled __anext__ finish unwinding BEFORE closing the
+        # generator — calling aclose() while that task is still in flight
+        # raises "RuntimeError: aclose(): asynchronous generator is already
+        # running", which would turn every clean shutdown into a traceback.
+        if next_task is not None and not next_task.done():
+            next_task.cancel()
+            try:
+                await next_task
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
+        await frames.aclose()
         await source.close()
         if args.preview:
             cv2.destroyAllWindows()

@@ -76,7 +76,7 @@ def sharpness(image: np.ndarray) -> float:
 
 
 # ---------------------------------------------------------------------------
-# YOUR CALL — see README "Your contribution"
+# TUNING KNOBS — calibrate these against your own captures
 # ---------------------------------------------------------------------------
 
 # Starting points, not answers. Tune against a real capture.

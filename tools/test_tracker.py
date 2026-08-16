@@ -1,8 +1,8 @@
 """Checks the device-independent parts of the tracker (M3).
 
-Pose math and the blur metric run anywhere; the MASt3R-SLAM binding needs CUDA.
-The keyframe-buffer tests stay skipped until `select_keyframe` is implemented —
-see README "Your contribution".
+Pose math and the blur metric run anywhere; the MASt3R-SLAM binding needs CUDA,
+so the tests here cover the device-independent surface only. `select_keyframe`
+and the keyframe buffer are implemented and fully exercised below.
 
     python3 tools/test_tracker.py
 """

@@ -1,9 +1,9 @@
 """CUDA model backends: the real implementations behind the pipeline interfaces.
 
 None of this runs on Apple Silicon. It is written to run on Colab (see
-`colab/glasses3d_colab.ipynb`) and validated there by `colab/preflight.py`
-rather than by the local test suite — the local tests exercise `MockReconstructor`
-through exactly the same interface.
+`colab/glasses3d_colab.ipynb`) and validated there by that notebook's
+"Phase 1 check" cell rather than by the local test suite — the local tests
+exercise `MockReconstructor` through exactly the same interface.
 
 Reconstruction backend of choice is MapAnything: a 1B-parameter feed-forward
 model that regresses *metric* 3D geometry and optionally conditions on known

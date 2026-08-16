@@ -510,7 +510,13 @@ const drop = $("drop");
   e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave","drop"].forEach(t => drop.addEventListener(t, e => {
   e.preventDefault(); drop.classList.remove("over"); }));
-drop.addEventListener("drop", e => e.dataTransfer.files[0] && load(e.dataTransfer.files[0]));
+// No element-level drop->load handler here on purpose. Drop events bubble, so a
+// file dropped on #drop is already caught by the window handler below; having
+// both meant load() ran TWICE for one drop — parsing and uploading the whole
+// point cloud a second time. Measured 2026-08-15 with a synthetic DragEvent
+// against this exact handler layout: 2 calls before, 1 after removing this one.
+// The dragleave/drop pair above still clears the .over class, which is
+// idempotent and safe to keep.
 addEventListener("dragover", e => e.preventDefault());
 addEventListener("drop", e => {
   e.preventDefault();
