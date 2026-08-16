@@ -86,16 +86,47 @@ never saw, with the same caveat as Voyager: plausible fills, not measurements.
 | M4b — dynamic objects | **world model + pipeline done and tested**; SAM 3 / FoundationPose need CUDA |
 | M5 — export | **done, tested** — 3DGS PLY + scene graph |
 | Colab | **notebook validated**; models unrun |
+| Live loop | **done, tested** - stages run together without stalling each other |
 | Walkthrough viewer | **done, tested in-browser** - WASD, 1st/3rd person |
 | Blender export | **script generated + syntax-checked**; unrun (no Blender here) |
 
-165 tests pass locally. Everything model-dependent sits behind an interface with
+192 tests pass locally. Everything model-dependent sits behind an interface with
 a working mock, so the surrounding logic is verified even where the models are not.
 
 **Still genuinely unverified:** no neural model in this repo has ever executed.
 MapAnything, SAM 3, FoundationPose and MASt3R-SLAM are all written against their
 documented APIs and exercised only through mocks. First real Colab run is where
 that gets tested.
+
+## The live loop
+
+`server/pipeline.py` runs every stage together. The organising constraint is
+that they have wildly different costs and must not wait on each other:
+
+| Stage | Rate | Cost |
+|---|---|---|
+| camera + object pose tracking | every frame | must keep up |
+| object detection | every ~15 frames | expensive |
+| densification | occasional | very expensive |
+| writing artifacts | throttled | I/O |
+
+Densification runs on a worker thread and the loop never blocks on it. When a
+pass is still running and the next is due, the new one is **dropped rather than
+queued** - a backlog would produce geometry describing where the camera was a
+minute ago, and stale geometry is worse than less geometry. Measured: 60 frames
+in 0.26s while each pass took 0.25s (1 ran, 18 dropped); queueing them would
+have cost ~4.75s.
+
+Two failure modes are handled explicitly rather than by luck:
+
+- **Tracking lost.** Everything downstream is anchored to camera pose, so a
+  frame without one contributes nothing. Anchoring geometry to a fictional
+  location is worse than a gap and much harder to spot later.
+- **Densify throws.** Counted and skipped. Camera tracking and object updates
+  stay useful, and the next pass may well succeed.
+
+Swapping the mocks for the CUDA backends changes which objects get constructed,
+not the shape of the loop.
 
 ## Walking through your world
 
@@ -222,6 +253,7 @@ server/perception.py   SAM 3 / FoundationPose adapters + mocks + pipeline
 server/export.py       3DGS PLY, point cloud, scene graph, scene baking
 server/backends.py     CUDA model adapters (MapAnything) + GPU capability probe
 server/reconstruct.py  offline driver: video in, scene.ply out
+server/pipeline.py     live loop: ties every stage together
 server/blender_export.py  generates the Blender setup script + output README
 viewer/walkthrough.html   self-contained WebGL walkthrough
 colab/                 Colab notebook (offline + live modes)
@@ -253,7 +285,7 @@ python3 tools/mock_sender.py --ladder
 ## Tests
 
 ```bash
-for t in tracker worldmodel perception export reconstruct calibration; do python3 tools/test_$t.py; done
+for t in tracker worldmodel perception export reconstruct pipeline calibration; do python3 tools/test_$t.py; done
 python3 tools/make_viewer_fixtures.py && node tools/test_viewer.mjs
 ```
 
