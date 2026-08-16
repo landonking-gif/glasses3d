@@ -128,6 +128,17 @@ Two failure modes are handled explicitly rather than by luck:
 Swapping the mocks for the CUDA backends changes which objects get constructed,
 not the shape of the loop.
 
+Run it:
+
+```bash
+python3 server/live.py --source mock --backend mock          # no hardware needed
+python3 server/live.py --source ws --backend mapanything --track mast3r --detect "pencil,mug"
+```
+
+It writes into `--out` as it goes, so you can point the walkthrough viewer at
+that folder while it is still running. Ctrl-C exits cleanly and writes a final
+export.
+
 ## Walking through your world
 
 **Hosted:** https://claude.ai/code/artifact/a5bf81c6-c858-4459-adac-0641ba1db3ad
@@ -254,6 +265,7 @@ server/export.py       3DGS PLY, point cloud, scene graph, scene baking
 server/backends.py     CUDA model adapters (MapAnything) + GPU capability probe
 server/reconstruct.py  offline driver: video in, scene.ply out
 server/pipeline.py     live loop: ties every stage together
+server/live.py         CLI entry point for the live loop
 server/blender_export.py  generates the Blender setup script + output README
 viewer/walkthrough.html   self-contained WebGL walkthrough
 colab/                 Colab notebook (offline + live modes)
