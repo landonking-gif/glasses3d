@@ -46,7 +46,7 @@ class ReconstructionResult:
 
     def filtered(self, min_conf: float = 0.5, max_points: int = 2_000_000,
                  seed: int = 0) -> "ReconstructionResult":
-        """Drop low-confidence points, then subsample to a budget.
+        """Drop non-finite and low-confidence points, then subsample to a budget.
 
         Both steps are load-bearing. Feed-forward models emit a prediction for
         *every* pixel including sky, motion blur, and untextured wall, and the
@@ -55,7 +55,14 @@ class ReconstructionResult:
         points per view — enough to exhaust VRAM during export and to stall
         every downstream viewer.
         """
-        keep = self.confidence >= min_conf
+        # Drop non-finite points as well as low-confidence ones. Feed-forward
+        # models emit NaN/Inf for pixels they cannot resolve, and a single Inf
+        # is not a single bad point - it destroys every downstream bounding-box
+        # computation, so the viewer frames an infinite scene and shows nothing.
+        # Much easier to drop here than to diagnose as "the reconstruction is
+        # blank".
+        finite = np.isfinite(self.points).all(axis=1)
+        keep = (self.confidence >= min_conf) & finite
         pts, cols, conf = self.points[keep], self.colors[keep], self.confidence[keep]
         if len(pts) > max_points:
             # Uniform random, not stride-based: strided subsampling of a

@@ -128,6 +128,17 @@ check("baked object sits at its posed location",
 check("baking an empty scene is safe", len(bake_scene(None, [])) == 0)
 check("baking with no background works", len(bake_scene(None, [(obj, T())])) == 10)
 
+# --- degenerate clouds ------------------------------------------------------
+# An empty cloud is reachable: bake_scene with nothing to bake, and a
+# reconstruction where every point failed the confidence filter both produce
+# one. numpy's .max() raises on a zero-size array rather than returning a
+# default, so this used to crash at write time.
+empty = Splats.from_points(np.zeros((0, 3)), np.zeros((0, 3)))
+ep = write_splats(os.path.join(tmp, "empty.ply"), empty)
+check("empty splat cloud writes a valid 0-vertex PLY", read_ply_header(ep)["count"] == 0)
+check("empty cloud has consistent array shapes",
+      len(empty) == 0 and empty.scales.shape == (0, 3) and empty.rots.shape == (0, 4))
+
 # --- scene graph ------------------------------------------------------------
 g = write_scene_graph(os.path.join(tmp, "scene.json"), {"background": "geo/room", "objects": []})
 check("scene graph file is written", os.path.getsize(g) > 0)

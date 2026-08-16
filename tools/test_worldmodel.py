@@ -126,6 +126,21 @@ back = w.observe("pencil-1", T(0, 0, 0.8), 0.9, 41)
 check("re-observation emits 'returned'", back is not None and back.kind == "returned")
 check("returned object is SETTLED again", w.objects["pencil-1"].state == SETTLED)
 
+# --- non-finite poses must be refused, not absorbed -------------------------
+# NaN is worse than a missing pose and silently so: every comparison against it
+# is False, so the object would never register as moving and never settle - it
+# would freeze in place with nothing logged anywhere.
+w = WorldModel()
+nan_pose = T(); nan_pose[0, 3] = float("nan")
+inf_pose = T(); inf_pose[2, 3] = float("inf")
+check("add_object refuses a NaN pose", w.add_object("m", "mug", "g", nan_pose) is None)
+check("nothing was registered from it", len(w) == 0)
+w.add_object("m", "mug", "g", T(0, 0, 0.8))
+check("observe refuses a NaN pose", w.observe("m", nan_pose, 0.9, 1) is None)
+check("observe refuses an Inf pose", w.observe("m", inf_pose, 0.9, 2) is None)
+check("the stored pose survived the refusals",
+      np.isfinite(w.objects["m"].live_pose.t).all())
+
 # --- Pose6D round-trip ------------------------------------------------------
 m = T(0.1, -0.2, 0.3, deg=33.0, axis=(1, 1, 0))
 check("Pose6D round-trips a 4x4", np.allclose(Pose6D.from_matrix(m).to_matrix(), m))

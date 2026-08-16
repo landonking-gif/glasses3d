@@ -91,6 +91,20 @@ check("subsample keeps arrays aligned", len(cap.colors) == 100)
 check("subsample spans the whole confidence range",
       cap.confidence.max() - cap.confidence.min() > 0.5)
 
+# Feed-forward models emit NaN/Inf for pixels they cannot resolve. A single Inf
+# is not one bad point - it makes every downstream bounding-box computation
+# infinite, so the viewer frames an infinite scene and renders nothing.
+nf = ReconstructionResult(
+    points=np.array([[0., 0., 0.], [1., 1., 1.], [np.nan, 1., 2.],
+                     [np.inf, 0., 0.], [-np.inf, 0., 0.]]),
+    colors=np.zeros((5, 3), np.uint8), confidence=np.ones(5),
+    poses=np.zeros((1, 4, 4)), intrinsics=np.zeros((1, 3, 3)), view_count=1).filtered(min_conf=0.0)
+check("non-finite points are dropped", len(nf.points) == 2)
+check("every survivor is finite", np.isfinite(nf.points).all())
+check("arrays stay aligned after dropping non-finite",
+      len(nf.points) == len(nf.colors) == len(nf.confidence))
+check("extent is finite once they are gone", "inf" not in nf.summary())
+
 check("empty reconstruction summarises safely",
       "empty" in ReconstructionResult(np.zeros((0, 3)), np.zeros((0, 3)),
                                       np.zeros(0), np.zeros((0, 4, 4)),

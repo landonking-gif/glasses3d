@@ -161,6 +161,8 @@ class WorldModel:
     def add_object(self, obj_id: str, label: str, geometry_key: str,
                    pose: np.ndarray, seq: int = 0) -> Optional[ChangeEvent]:
         """Register a newly reconstructed object. Refuses deformables."""
+        if not np.isfinite(pose).all():
+            return None
         if label.lower() in DEFORMABLE_HINT:
             # A rigid transform cannot represent this. Tracking it anyway would
             # produce a confident, wrong pose — worse than not tracking it.
@@ -186,6 +188,13 @@ class WorldModel:
         # a wrong place, and a misplaced object is much harder to notice later
         # than one that simply did not update.
         if confidence < self.min_confidence:
+            return None
+
+        # A non-finite pose is worse than a missing one, and silently so: every
+        # comparison against NaN is False, so the object would never register
+        # as moving and never settle - it would simply freeze in place with no
+        # error anywhere.
+        if not np.isfinite(pose).all():
             return None
 
         new = Pose6D.from_matrix(pose)

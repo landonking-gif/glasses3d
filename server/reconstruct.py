@@ -133,6 +133,9 @@ def run(args) -> int:
         # counts of image and prediction aligned so colours map correctly.
         h = int(round(views[0].shape[0] * args.width / views[0].shape[1]))
         h -= h % 14  # most ViT backbones need dimensions divisible by the patch size
+        # An extreme aspect ratio can round straight to zero, and cv2.resize
+        # then raises rather than producing anything useful. Floor at one patch.
+        h = max(h, 14)
         views = [cv2.resize(v, (args.width, h)) for v in views]
         print("[resize] views at %dx%d" % (args.width, h))
 

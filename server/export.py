@@ -99,7 +99,10 @@ class Splats:
         xyz = np.asarray(xyz, dtype=np.float32).reshape(-1, 3)
         n = len(xyz)
         rgb = np.asarray(rgb, dtype=np.float32).reshape(n, 3)
-        if rgb.max() > 1.0:
+        # `.max()` on a zero-size array raises rather than returning a default,
+        # so an empty cloud - which bake_scene and a fully-filtered
+        # reconstruction both produce - has to be handled before the scale test.
+        if n and rgb.max() > 1.0:
             rgb = rgb / 255.0
         rots = np.tile(np.array([1.0, 0.0, 0.0, 0.0], np.float32), (n, 1))
         return cls(
